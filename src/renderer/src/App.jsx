@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Unlock, Plus, Maximize2, Minimize2, Trash2, Edit3, Check, Settings, Info, X } from 'lucide-react';
+import { Lock, Unlock, Plus, Maximize2, Minimize2, Trash2, Edit3, Check, Settings, Info, X, Power, Layers } from 'lucide-react';
 
 export default function App() {
   const [memos, setMemos] = useState(() => {
@@ -8,36 +8,44 @@ export default function App() {
       try { return JSON.parse(savedMemos); } catch (e) { console.error(e); }
     }
     return [
-      { id: 1, title: '欢迎使用桌面备忘录', content: '点击右上角锁头解锁后可编辑内容。\n再次点击锁头即可固定在桌面。', image: null, date: Date.now() },
+      { id: 1, title: '欢迎使用桌面备忘录', content: '点击右上角锁头解锁后可编辑内容。\n再次点击锁头即可固定并保存数据。', image: null, date: Date.now() },
     ];
   });
 
-  const [isLocked, setIsLocked] = useState(() => {
-    return localStorage.getItem('maorm-locked') === 'true';
-  });
-  const [isExpanded, setIsExpanded] = useState(false);
+  // 锁定状态（控制是否允许编辑和拖拽）
+  const [isLocked, setIsLocked] = useState(() => localStorage.getItem('maorm-locked') === 'true');
   
+  // 置顶状态（默认false，即只在桌面底层）
+  const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(() => localStorage.getItem('maorm-top') === 'true');
+  
+  const [isExpanded, setIsExpanded] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const [showAbout, setShowAbout] = useState(false);
+  const [toastMsg, setToastMsg] = useState(''); // 提示语状态
 
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ title: '', content: '' });
 
+  // 保存备忘录数据
   useEffect(() => {
     localStorage.setItem('maorm-memos', JSON.stringify(memos));
   }, [memos]);
 
+  // 监听并应用层级置顶状态
   useEffect(() => {
-    localStorage.setItem('maorm-locked', isLocked);
+    localStorage.setItem('maorm-top', isAlwaysOnTop);
     try {
       const { ipcRenderer } = window.require('electron');
-      // 【关键修复】：调用全新的 IPC 指令，防止出现鼠标穿透无法解锁的 Bug
-      ipcRenderer.send('toggle-pin-status', isLocked);
-    } catch (e) {
-      console.log('非 Electron 环境');
-    }
+      ipcRenderer.send('set-always-on-top', isAlwaysOnTop);
+    } catch (e) { console.log('非 Electron 环境'); }
+  }, [isAlwaysOnTop]);
+
+  // 保存锁定状态记录
+  useEffect(() => {
+    localStorage.setItem('maorm-locked', isLocked);
   }, [isLocked]);
 
+  // 窗口坐标记忆功能
   useEffect(() => {
     const savedX = localStorage.getItem('maorm-pos-x');
     const savedY = localStorage.getItem('maorm-pos-y');
@@ -55,11 +63,13 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // 点击标题文字专属的右键菜单
   const handleContextMenu = (e) => {
     e.preventDefault();
+    e.stopPropagation(); // 阻止冒泡，避免触发其他事件
     if (showAbout) return; 
-    const menuWidth = 140; 
-    const menuHeight = 100;
+    const menuWidth = 150; 
+    const menuHeight = 140;
     const x = Math.min(e.clientX, window.innerWidth - menuWidth - 10);
     const y = Math.min(e.clientY, window.innerHeight - menuHeight - 10);
     setContextMenu({ x, y });
@@ -69,7 +79,11 @@ export default function App() {
 
   useEffect(() => {
     window.addEventListener('click', closeContextMenu);
-    return () => window.removeEventListener('click', closeContextMenu);
+    window.addEventListener('contextmenu', closeContextMenu); // 点击其他地方右键也会关闭当前菜单
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('contextmenu', closeContextMenu);
+    };
   }, []);
 
   const sortedMemos = [...memos].sort((a, b) => b.date - a.date);
@@ -99,30 +113,52 @@ export default function App() {
     setEditingId(null);
   };
 
+  // 切换锁定：解锁时弹出 Toast 提示
   const toggleLock = () => {
-    // 采用函数式更新，确保状态100%正确切换
-    setIsLocked(prev => !prev);
+    setIsLocked(prev => {
+      const nextState = !prev;
+      if (!nextState) { // 从锁定变为了解锁
+        setToastMsg('⚠️ 提示：必须锁定才能保存数据与固定位置');
+        setTimeout(() => setToastMsg(''), 3500); // 3.5秒后消失
+      }
+      return nextState;
+    });
+  };
+
+  // 退出软件
+  const quitApp = () => {
+    try {
+      const { ipcRenderer } = window.require('electron');
+      ipcRenderer.send('quit-app');
+    } catch (e) { console.log('非 Electron 环境'); }
   };
 
   return (
     <div 
-      // 【修复】：彻底去除了 rounded 圆角类名，改为纯直角 (rounded-none)，解决 Windows 下的底层黑块 Bug
+      // 最外层去除了 onContextMenu，确保别的地方右键无反应，且采用直角设计 rounded-none
       className={`w-screen h-screen rounded-none border flex flex-col overflow-hidden transition-all duration-500 ease-in-out font-sans relative select-none
         ${isLocked ? 'bg-white/5 border-white/5 backdrop-blur-md' : 'bg-white/20 border-white/20 shadow-2xl ring-1 ring-white/30 backdrop-blur-xl'}
         dark:bg-black/20 dark:border-white/10 text-gray-800 dark:text-gray-100
       `}
       style={{ WebkitAppRegion: isLocked ? 'no-drag' : 'drag' }}
-      onContextMenu={handleContextMenu}
     >
-      {/* 标题栏 (去除了圆角) */}
+      {/* 标题栏 */}
       <div className="h-10 px-4 flex items-center justify-between border-b border-black/5 dark:border-white/5 bg-white/5 dark:bg-black/10 shrink-0">
-        <span className="text-sm font-bold tracking-widest text-gray-800/80 dark:text-gray-200/80">桌面备忘录</span>
+        
+        {/* 【改动】：只有精准点击这几个字才会弹出右键菜单 */}
+        <span 
+          onContextMenu={handleContextMenu}
+          className="text-sm font-bold tracking-widest text-gray-800/80 dark:text-gray-200/80 cursor-context-menu hover:text-blue-500 transition-colors pointer-events-auto"
+          style={{ WebkitAppRegion: 'no-drag' }}
+          title="右键点击显示菜单"
+        >
+          桌面备忘录
+        </span>
         
         <div className="flex items-center gap-1">
-          {/* 锁头按钮：确保 z-index 最高且 pointer-events-auto，绝对可以被点击 */}
           <button 
             onClick={toggleLock}
-            className={`p-1.5 rounded-none transition-all flex items-center justify-center cursor-pointer relative z-50 pointer-events-auto
+            className={`p-1.5 rounded-none transition-all flex items-center justify-center cursor-pointer relative z-40 pointer-events-auto
               ${isLocked ? 'hover:bg-black/10 dark:hover:bg-white/10' : 'hover:bg-black/10 dark:hover:bg-white/10'}
             `}
             style={{ WebkitAppRegion: 'no-drag' }}
@@ -138,7 +174,7 @@ export default function App() {
           {!isLocked && (
             <button 
               onClick={handleAddMemo} 
-              className="p-1.5 hover:bg-black/10 dark:hover:bg-white/10 rounded-none transition-colors cursor-pointer text-gray-700 dark:text-gray-200 relative z-50 pointer-events-auto"
+              className="p-1.5 hover:bg-black/10 dark:hover:bg-white/10 rounded-none transition-colors cursor-pointer text-gray-700 dark:text-gray-200 relative z-40 pointer-events-auto"
               style={{ WebkitAppRegion: 'no-drag' }}
             >
               <Plus size={16} />
@@ -147,7 +183,14 @@ export default function App() {
         </div>
       </div>
 
-      {/* 内容栏：锁定模式下加入 pointer-events-none，左键完全失去响应 */}
+      {/* 动态 Toast 提示浮窗 */}
+      {toastMsg && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 bg-black/70 text-white text-xs px-3 py-1.5 rounded-full z-50 pointer-events-none backdrop-blur-sm shadow-lg whitespace-nowrap border border-white/20 transition-opacity animate-in fade-in duration-300">
+          {toastMsg}
+        </div>
+      )}
+
+      {/* 内容栏：锁定模式下失去响应 */}
       <div 
         className={`flex-1 p-3 flex flex-col gap-3 overflow-y-auto overflow-x-hidden custom-scrollbar transition-opacity duration-300
           ${isLocked ? 'pointer-events-none opacity-80' : ''}
@@ -162,7 +205,6 @@ export default function App() {
           displayMemos.map((memo) => (
             <div 
               key={memo.id} 
-              // 【修复】：内层卡片同样去除圆角 (rounded-none)
               className={`group bg-white/20 dark:bg-black/20 rounded-none p-3 shadow-sm border border-white/20 dark:border-white/5 transition-all flex flex-col relative
                 ${displayMemos.length === 1 ? 'flex-1' : displayMemos.length === 2 ? 'h-1/2 flex-1' : 'min-h-[100px] shrink-0'}
               `}
@@ -238,31 +280,58 @@ export default function App() {
         )}
       </div>
 
-      {/* 右键菜单 */}
+      {/* 全新的强大右键菜单 */}
       {contextMenu && (
         <div 
+          // 为了确保不会被拖拽事件干扰，加入 pointer-events-auto
           style={{ top: contextMenu.y, left: contextMenu.x, WebkitAppRegion: 'no-drag' }}
-          className="absolute z-40 w-32 bg-white/90 dark:bg-gray-800/90 backdrop-blur-xl border border-white/30 dark:border-gray-600 shadow-xl rounded-none p-1.5 text-sm"
+          className="absolute z-50 w-36 bg-white/90 dark:bg-gray-800/90 backdrop-blur-xl border border-white/30 dark:border-gray-600 shadow-xl rounded-none p-1.5 text-sm pointer-events-auto"
         >
+          {/* 层级切换开关 */}
+          <button 
+            onClick={() => setIsAlwaysOnTop(!isAlwaysOnTop)}
+            className="w-full text-left px-2 py-1.5 flex items-center justify-between hover:bg-blue-500 hover:text-white dark:hover:bg-blue-600 rounded-none transition-colors text-gray-700 dark:text-gray-200 cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <Layers size={13} />
+              <span>全局置顶</span>
+            </div>
+            {/* 状态小点指示器 */}
+            <div className={`w-2 h-2 rounded-full border border-gray-400 ${isAlwaysOnTop ? 'bg-green-500 border-none' : 'bg-transparent'}`} />
+          </button>
+          
+          <div className="h-px bg-gray-300/50 dark:bg-gray-600/50 my-1 mx-1" />
+
           <button 
             onClick={() => {
               try {
                 const { ipcRenderer } = window.require('electron');
                 ipcRenderer.send('toggle-auto-start', true);
-                alert('已设置开机自启');
+                alert('已尝试添加开机自启');
               } catch (e) { console.log('IPC error'); }
             }}
             className="w-full text-left px-2 py-1.5 flex items-center gap-2 hover:bg-blue-500 hover:text-white dark:hover:bg-blue-600 rounded-none transition-colors text-gray-700 dark:text-gray-200 cursor-pointer"
           >
             <Settings size={13} />
-            开机启动
+            开机自启动
           </button>
+          
           <button 
             onClick={() => setShowAbout(true)}
-            className="w-full text-left px-2 py-1.5 flex items-center gap-2 hover:bg-blue-500 hover:text-white dark:hover:bg-blue-600 rounded-none transition-colors text-gray-700 dark:text-gray-200 mt-1 cursor-pointer"
+            className="w-full text-left px-2 py-1.5 flex items-center gap-2 hover:bg-blue-500 hover:text-white dark:hover:bg-blue-600 rounded-none transition-colors text-gray-700 dark:text-gray-200 cursor-pointer"
           >
             <Info size={13} />
-            关于
+            关于本软件
+          </button>
+
+          <div className="h-px bg-gray-300/50 dark:bg-gray-600/50 my-1 mx-1" />
+
+          <button 
+            onClick={quitApp}
+            className="w-full text-left px-2 py-1.5 flex items-center gap-2 hover:bg-red-500 hover:text-white dark:hover:bg-red-600 rounded-none transition-colors text-red-600 dark:text-red-400 cursor-pointer"
+          >
+            <Power size={13} />
+            退出备忘录
           </button>
         </div>
       )}
@@ -270,10 +339,10 @@ export default function App() {
       {/* 关于弹窗 */}
       {showAbout && (
         <div 
-          className="absolute inset-0 z-50 bg-black/10 backdrop-blur-sm flex items-center justify-center p-4"
+          className="absolute inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center p-4 pointer-events-auto"
           style={{ WebkitAppRegion: 'no-drag' }}
         >
-          <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-xl border border-white/30 dark:border-gray-600 shadow-2xl rounded-none w-full p-5 flex flex-col items-center relative">
+          <div className="bg-white/95 dark:bg-gray-800/95 backdrop-blur-xl border border-white/30 dark:border-gray-600 shadow-2xl rounded-none w-full p-5 flex flex-col items-center relative">
             <button 
               onClick={() => setShowAbout(false)}
               className="absolute top-3 right-3 p-1 text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-white bg-black/5 rounded-none transition-colors cursor-pointer"
@@ -284,7 +353,7 @@ export default function App() {
               <Edit3 size={24} />
             </div>
             <h2 className="text-lg font-bold text-gray-800 dark:text-white mb-1">桌面备忘录</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Version 1.0.2</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Version 1.0.3</p>
             <div className="w-full bg-black/5 dark:bg-black/20 rounded-none p-3 text-center border border-white/10">
               <p className="text-sm text-gray-700 dark:text-gray-300">Designed & Developed by</p>
               <p className="text-base font-semibold text-blue-600 dark:text-blue-400 mt-0.5">MaoRM</p>
@@ -298,8 +367,8 @@ export default function App() {
         body { margin: 0; background: transparent !important; overflow: hidden; }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.3); border-radius: 0px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.6); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.4); border-radius: 0px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.8); }
         input, textarea, .select-text { -webkit-user-select: text; user-select: text; }
       `}} />
     </div>
