@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: my-memo-app
+appId: com.maorm.memo
+productName: 桌面备忘录
 directories:
   buildResources: build
 files:
